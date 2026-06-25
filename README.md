@@ -2,6 +2,8 @@
 <!-- SPDX-License-Identifier: Apache-2.0 -->
 # dvb-cxx
 
+[![pios](https://github.com/jwinarske/dvb-cxx/actions/workflows/pios.yaml/badge.svg)](https://github.com/jwinarske/dvb-cxx/actions/workflows/pios.yaml)
+
 A C++17 player for ATSC/DVB TV tuners on the Linux DVB API. It tunes a digital
 TV channel, demuxes the transport stream, decodes the video, and scans it out
 **zero-copy** on a hardware plane via

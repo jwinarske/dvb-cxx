@@ -1,0 +1,170 @@
+---
+# Cross-compiled PiOS (aarch64) artifacts via emb + a prebuilt toolchain image.
+#
+# Two phases (patterned after toyota-connected/ivi-homescreen):
+#   publish-<os>  (per PiOS variant) — emb resolves the toolchain + sysroot and
+#                 publishes a content-addressed OCI image to GHCR. The emb cross
+#                 sandbox is cached, and `emb cross --publish` skips the build
+#                 when the image (keyed by the manifest's sysroot_key) already
+#                 exists, so this is a near-no-op once warm.
+#   build-...     (per board x os) — runs INSIDE the published image, where
+#                 `emb cross --build -w /emb` is a pure cache hit on the baked
+#                 toolchain + sysroot. No per-run toolchain/sysroot fetch.
+#
+# Runs on x86_64 runners: the pinned ARM toolchain cross-compiles aarch64 (no
+# emulation). The sysroot is model-independent (same packages for rpi4/rpi5), so
+# one image per OS serves both boards; only the -mcpu tuning differs at build
+# time. dvb-cxx builds a single binary (dvb-kms); the decode backend (V4L2 ▸
+# software on the Pi) is a runtime choice, so there is no backend matrix.
+name: pios
+
+on:
+  pull_request:
+    types: [opened, synchronize, reopened]
+  push:
+    branches: [main]
+  workflow_dispatch:
+
+concurrency:
+  group: ${{ github.workflow }}-${{ github.ref }}
+  cancel-in-progress: true
+
+env:
+  EMB_REPO: https://github.com/toyota-connected/emb_cli.git
+  IMAGE: ghcr.io/${{ github.repository_owner }}/dvb-cxx-emb-cross-aarch64
+  # emb cross sandbox (toolchain + sysroot) for the publish phase — cached.
+  EMB_WS: ${{ github.workspace }}/.emb-ws
+
+jobs:
+  publish:
+    if: ${{ github.server_url == 'https://github.com' }}
+    runs-on: ubuntu-24.04
+    permissions:
+      contents: read
+      packages: write
+    strategy:
+      fail-fast: false
+      matrix:
+        pios: [bookworm, trixie]
+    name: publish-${{ matrix.pios }}
+    steps:
+      - name: Checkout dvb-cxx
+        uses: actions/checkout@v5
+        with:
+          path: dvb-cxx
+          submodules: recursive
+
+      - name: Install emb resolve host tools
+        run: |
+          sudo apt-get update
+          sudo apt-get install -y --no-install-recommends \
+            tar xz-utils rsync curl ca-certificates
+
+      - name: Fetch emb
+        run: git clone --depth 1 "$EMB_REPO" emb_cli
+
+      - name: Cache cross sandbox (toolchain + sysroot)
+        uses: actions/cache@v5
+        with:
+          path: ${{ env.EMB_WS }}
+          key: emb-xc-${{ matrix.pios }}-${{ hashFiles('dvb-cxx/.emb/base.emb.yaml', 'dvb-cxx/.emb/raspberry-pi.emb.yaml', 'emb_cli/boards/raspberry-pi.emb.yaml') }}
+          restore-keys: |
+            emb-xc-${{ matrix.pios }}-
+
+      - name: Log in to GHCR
+        run: |
+          echo "${{ secrets.GITHUB_TOKEN }}" \
+            | docker login ghcr.io -u "${{ github.actor }}" --password-stdin
+
+      # rpi5-<os> is the canonical publish target: the sysroot (and thus the
+      # image) is model-independent, so one image per OS serves rpi4 too.
+      # --tag <os> is the stable alias the build matrix consumes; the immutable
+      # sysroot_key tag is always pushed + skip-checked.
+      - name: Publish toolchain image (${{ matrix.pios }})
+        working-directory: dvb-cxx
+        run: |
+          eval "$(../emb_cli/bootstrap.sh --shellenv)"
+          emb --version
+          emb cross . \
+            --target "rpi5-${{ matrix.pios }}" \
+            --publish --image "$IMAGE" --tag "${{ matrix.pios }}" \
+            -w "$EMB_WS"
+
+  build:
+    needs: publish
+    if: ${{ github.server_url == 'https://github.com' }}
+    runs-on: ubuntu-24.04
+    permissions:
+      contents: read
+      packages: read
+    container:
+      image: ghcr.io/${{ github.repository_owner }}/dvb-cxx-emb-cross-aarch64:${{ matrix.pios }}
+      credentials:
+        username: ${{ github.actor }}
+        password: ${{ secrets.GITHUB_TOKEN }}
+    strategy:
+      fail-fast: false
+      matrix:
+        pios: [bookworm, trixie]
+        board: [rpi5, rpi4]
+    name: build-${{ matrix.board }}-${{ matrix.pios }}
+    steps:
+      - name: Checkout dvb-cxx
+        uses: actions/checkout@v5
+        with:
+          path: dvb-cxx
+          submodules: recursive
+
+      - name: Fetch emb
+        run: git clone --depth 1 "$EMB_REPO" emb_cli
+
+      # The image bakes the toolchain + sysroot at /emb, so -w /emb resolves as
+      # a pure cache hit (no download/extract). Host build tools (cmake, ninja,
+      # meson) are baked too.
+      - name: Build dvb-kms
+        working-directory: dvb-cxx
+        # Container jobs default to dash (sh); pipefail/SECONDS need bash.
+        shell: bash
+        run: |
+          set -o pipefail
+          eval "$(../emb_cli/bootstrap.sh --shellenv)"
+          emb --version
+          start=$SECONDS
+          emb cross . \
+            --target "${{ matrix.board }}-${{ matrix.pios }}" \
+            --build --backend kms \
+            --no-verify -w /emb | tee /tmp/emb-build.log
+          dur=$(( SECONDS - start ))
+          {
+            echo "### ${{ matrix.board }}-${{ matrix.pios }}"
+            echo ""
+            echo "- total: ${dur}s (cache-hit consume — no toolchain/sysroot fetch)"
+            grep -aE "Resolved|augment +:|build +:" /tmp/emb-build.log \
+              | sed -E 's/^[[:space:]]*[^A-Za-z]*/- /' || true
+          } >> "$GITHUB_STEP_SUMMARY"
+
+      - name: Upload dvb-kms binary
+        uses: actions/upload-artifact@v7
+        with:
+          name: dvb-kms-${{ matrix.board }}-${{ matrix.pios }}
+          path: /emb/.config/flutter_workspace/cross-build-*/build-kms/dvb-kms
+          if-no-files-found: error
+
+  # Single stable status for branch protection: aggregates the publish + build
+  # matrix into one `pios` check. Passes on success or skipped (e.g. the
+  # github.com guard); fails if any publish/build job failed or was cancelled.
+  pios:
+    needs: [publish, build]
+    if: always()
+    runs-on: ubuntu-24.04
+    steps:
+      - name: Gate on publish + build
+        run: |
+          for r in "${{ needs.publish.result }}" "${{ needs.build.result }}"; do
+            case "$r" in
+              failure|cancelled)
+                echo "pios gate: a required job result was '$r'"; exit 1 ;;
+            esac
+          done
+          echo "pios gate ok: publish=${{ needs.publish.result }} \
+            build=${{ needs.build.result }}"

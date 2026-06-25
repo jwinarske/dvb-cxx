@@ -1,0 +1,81 @@
+# dvb-cxx on Raspberry Pi (PiOS aarch64) — the project layer.
+#
+# Hardware/OS facts (toolchain, sysroot image, partition, cpu tuning, base
+# DRM/input/EGL stack) come from emb's shipped board library
+# (boards/raspberry-pi.emb.yaml); each target `extends` a board and overlays
+# dvb-cxx's extra packages and CMake config:
+#
+#   emb cross raspberry-pi.emb.yaml --list-targets
+#   emb cross raspberry-pi.emb.yaml --target rpi5-trixie --build --deb
+#
+# Decode path on the Pi is V4L2 ▸ software (TVTUNER_DECODER=auto picks at
+# runtime): the VAAPI backend is intentionally NOT built — there is no VAAPI
+# driver on Raspberry Pi (VAAPI is a desktop-GPU API), so we omit libva and let
+# CMake auto-disable it. The Pi 4's VideoCore VI exposes a V4L2 stateful decoder
+# (MPEG-2 with the codec license, plus H.264); the Pi 5 has no hardware video
+# decode block, so it falls through to CPU software decode. The same binary
+# serves both — only the toolchain CPU tuning differs.
+#
+# drm-cxx (a submodule at third_party/drm-cxx) needs libdisplay-info >= 0.2.0:
+# trixie ships it; bookworm cross-builds 0.2.0 from source.
+id: dvb-cxx
+type: app
+supported_archs: [arm64]
+supported_host_types: [ubuntu, fedora]
+
+build:
+  app_path: .
+  archs: [arm64]
+  modes: [release]
+  output: bundles
+
+cross:
+  package:
+    name: dvb-cxx
+    version: 0.1.0
+    maintainer: "Joel Winarske <joel.winarske@gmail.com>"
+    description: "ATSC/DVB tuner DRM/KMS player, cross-built by emb"
+    section: utils
+    bin: dvb-kms          # relative to each backend build dir
+    install_dir: /usr/bin
+
+  targets:
+    # -- Raspberry Pi 5 (Cortex-A76) — software decode (no HW video block) --
+    rpi5-trixie:
+      extends: rpi5-trixie
+      sysroot:
+        dev_packages: &dvb_packages_trixie
+          - libavcodec-dev
+          - libavutil-dev
+          - libswscale-dev
+          - libdisplay-info-dev   # trixie ships >= 0.2.0
+      backends: &backends_kms
+        kms:
+          TVTUNER_SOFTWARE_ONLY: 'OFF'
+    rpi5-bookworm:
+      extends: rpi5-bookworm
+      sysroot:
+        dev_packages: &dvb_packages_bookworm
+          - libavcodec-dev
+          - libavutil-dev
+          - libswscale-dev
+      augment: &augment_libdisplayinfo
+        - pkg: libdisplay-info
+          min: "0.2.0"
+          url: https://gitlab.freedesktop.org/emersion/libdisplay-info/-/archive/0.2.0/libdisplay-info-0.2.0.tar.gz
+          build: meson
+          static: true
+      backends: *backends_kms
+
+    # -- Raspberry Pi 4 (Cortex-A72) — V4L2 stateful decoder + software -----
+    rpi4-trixie:
+      extends: rpi4-trixie
+      sysroot:
+        dev_packages: *dvb_packages_trixie
+      backends: *backends_kms
+    rpi4-bookworm:
+      extends: rpi4-bookworm
+      sysroot:
+        dev_packages: *dvb_packages_bookworm
+      augment: *augment_libdisplayinfo
+      backends: *backends_kms
