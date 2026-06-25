@@ -71,7 +71,10 @@ Frontend::~Frontend() {
     ::close(fd_);
 }
 
-bool Frontend::tune(uint32_t freq_hz, Modulation mod, int timeout_ms) const {
+bool Frontend::tune(uint32_t freq_hz,
+                    Modulation mod,
+                    int timeout_ms,
+                    bool verbose) const {
   // Clear any previous tune state first.
   dtv_property clr{};
   clr.cmd = DTV_CLEAR;
@@ -99,33 +102,39 @@ bool Frontend::tune(uint32_t freq_hz, Modulation mod, int timeout_ms) const {
     return false;
   }
 
-  std::fprintf(stderr, "dvb: tuning %.3f MHz %s ...\n", freq_hz / 1e6,
-               mod == Modulation::Vsb8 ? "8-VSB" : "QAM");
+  if (verbose)
+    std::fprintf(stderr, "dvb: tuning %.3f MHz %s ...\n", freq_hz / 1e6,
+                 mod == Modulation::Vsb8 ? "8-VSB" : "QAM");
 
   const auto deadline =
       std::chrono::steady_clock::now() + std::chrono::milliseconds(timeout_ms);
   while (std::chrono::steady_clock::now() < deadline) {
     fe_status_t st{};
     if (xioctl(fd_, FE_READ_STATUS, &st) == 0 && (st & FE_HAS_LOCK) != 0) {
-      const SignalStatus s = status();
-      std::fprintf(stderr, "dvb: LOCK (signal=%u snr=%u)\n", s.signal, s.snr);
+      if (verbose) {
+        const SignalStatus s = status();
+        std::fprintf(stderr, "dvb: LOCK (signal=%u snr=%u)\n", s.signal, s.snr);
+      }
       return true;
     }
     std::this_thread::sleep_for(std::chrono::milliseconds(50));
   }
-  std::fprintf(stderr, "dvb: no lock within %d ms (check antenna/cable)\n",
-               timeout_ms);
+  if (verbose)
+    std::fprintf(stderr, "dvb: no lock within %d ms (check antenna/cable)\n",
+                 timeout_ms);
   return false;
 }
 
-bool Frontend::tune_atsc_channel(int channel, int timeout_ms) const {
+bool Frontend::tune_atsc_channel(int channel,
+                                 int timeout_ms,
+                                 bool verbose) const {
   const uint32_t f = atsc_channel_freq_hz(channel);
   if (f == 0) {
     std::fprintf(stderr, "dvb: channel %d out of ATSC range (2..69)\n",
                  channel);
     return false;
   }
-  return tune(f, Modulation::Vsb8, timeout_ms);
+  return tune(f, Modulation::Vsb8, timeout_ms, verbose);
 }
 
 SignalStatus Frontend::status() const {

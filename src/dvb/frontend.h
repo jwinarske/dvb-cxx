@@ -43,16 +43,19 @@ class Frontend {
   ~Frontend();
 
   // Tune to `freq_hz` with `mod` and block until FE_HAS_LOCK or `timeout_ms`
-  // elapses. Returns true on lock. const: the fd is a handle; tuning changes
+  // elapses. Returns true on lock. `verbose` logs tuning/lock progress (pass
+  // false for a quiet channel sweep). const: the fd is a handle; tuning changes
   // hardware state, not this wrapper (mirrors drm::Device's const ioctl
   // methods).
   [[nodiscard]] bool tune(uint32_t freq_hz,
                           Modulation mod,
-                          int timeout_ms = 3000) const;
+                          int timeout_ms = 3000,
+                          bool verbose = true) const;
 
   // Convenience: tune a North-American ATSC OTA physical channel (8-VSB).
   [[nodiscard]] bool tune_atsc_channel(int channel,
-                                       int timeout_ms = 3000) const;
+                                       int timeout_ms = 3000,
+                                       bool verbose = true) const;
 
   [[nodiscard]] SignalStatus status() const;
   [[nodiscard]] int adapter() const noexcept { return adapter_; }
