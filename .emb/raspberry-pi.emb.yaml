@@ -79,3 +79,19 @@ cross:
         dev_packages: *dvb_packages_bookworm
       augment: *augment_libdisplayinfo
       backends: *backends_kms
+
+    # -- Raspberry Pi Zero 2 W (Cortex-A53) — software decode only ----------
+    # The A53 is a weak CPU; software MPEG-2 decode will struggle at full
+    # broadcast resolution. Build config is identical (V4L2 ▸ software); only
+    # the -mcpu tuning differs.
+    rpi-zero-2w-trixie:
+      extends: rpi-zero-2w-trixie
+      sysroot:
+        dev_packages: *dvb_packages_trixie
+      backends: *backends_kms
+    rpi-zero-2w-bookworm:
+      extends: rpi-zero-2w-bookworm
+      sysroot:
+        dev_packages: *dvb_packages_bookworm
+      augment: *augment_libdisplayinfo
+      backends: *backends_kms

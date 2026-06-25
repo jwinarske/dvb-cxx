@@ -12,9 +12,9 @@
 #                 toolchain + sysroot. No per-run toolchain/sysroot fetch.
 #
 # Runs on x86_64 runners: the pinned ARM toolchain cross-compiles aarch64 (no
-# emulation). The sysroot is model-independent (same packages for rpi4/rpi5), so
-# one image per OS serves both boards; only the -mcpu tuning differs at build
-# time. dvb-cxx builds a single binary (dvb-kms); the decode backend (V4L2 ▸
+# emulation). The sysroot is model-independent (same packages across boards), so
+# one image per OS serves rpi5/rpi4/rpi-zero-2w; only the -mcpu tuning differs at
+# build time. dvb-cxx builds a single binary (dvb-kms); the decode backend (V4L2 ▸
 # software on the Pi) is a runtime choice, so there is no backend matrix.
 name: pios
 
@@ -106,7 +106,7 @@ jobs:
       fail-fast: false
       matrix:
         pios: [bookworm, trixie]
-        board: [rpi5, rpi4]
+        board: [rpi5, rpi4, rpi-zero-2w]
     name: build-${{ matrix.board }}-${{ matrix.pios }}
     steps:
       - name: Checkout dvb-cxx
