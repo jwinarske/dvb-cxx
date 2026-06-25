@@ -1,0 +1,22 @@
+# Build output
+/build/
+/build-*/
+*.o
+*.a
+
+# CMake
+CMakeCache.txt
+CMakeFiles/
+cmake_install.cmake
+
+# Editor / tooling
+/.cache/
+compile_commands.json
+.claude/settings.local.json
+
+# Test / capture artifacts
+*.ts
+*.es
+*.m2v
+*.nv12
+capture-*.nv12
