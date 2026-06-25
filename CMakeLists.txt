@@ -22,6 +22,11 @@ find_package(Threads REQUIRED)
 pkg_check_modules(LIBAV  REQUIRED IMPORTED_TARGET libavcodec libavutil)
 pkg_check_modules(LIBSWS REQUIRED IMPORTED_TARGET libswscale)
 pkg_check_modules(LIBDRM REQUIRED IMPORTED_TARGET libdrm)
+pkg_check_modules(LIBVA  IMPORTED_TARGET libva libva-drm)  # optional: VAAPI
+
+# Build only the software (CPU) decoder; drop the VAAPI + V4L2 hardware backends
+# (and the libva dependency) for a smaller CPU-only build.
+option(TVTUNER_SOFTWARE_ONLY "Build only the software (CPU) decoder" OFF)
 
 # drm-cxx is pinned as a git submodule (third_party/drm-cxx) and consumed via
 # add_subdirectory; override DRM_CXX_DIR to build against a local working tree.
@@ -55,7 +60,7 @@ if(NOT EXISTS "${DRM_CXX_DIR}/subprojects/tcb-span/include")
 endif()
 add_subdirectory(${DRM_CXX_DIR} ${CMAKE_BINARY_DIR}/drm-cxx-build EXCLUDE_FROM_ALL)
 
-add_executable(dvb-kms
+set(DVB_KMS_SOURCES
   src/main.cpp
   src/kms_output.cpp
   src/kms_presenter.cpp
@@ -65,11 +70,31 @@ add_executable(dvb-kms
   src/ts/ts_demux.cpp
   src/ts/ts_parse.cpp
 )
-target_include_directories(dvb-kms PRIVATE src)
-target_link_libraries(dvb-kms PRIVATE
+set(DVB_KMS_DEFINES "")
+set(DVB_KMS_LIBS
   drm-cxx::drm-cxx
   PkgConfig::LIBAV PkgConfig::LIBSWS PkgConfig::LIBDRM
   Threads::Threads)
+
+if(NOT TVTUNER_SOFTWARE_ONLY)
+  # V4L2 M2M backend — needs only drm-cxx's V4l2DecoderSource + videodev2.h.
+  list(APPEND DVB_KMS_SOURCES src/v4l2_decoder_source_adapter.cpp)
+  list(APPEND DVB_KMS_DEFINES TVTUNER_HAVE_V4L2)
+  # VAAPI backend — needs libva (gracefully omitted when absent).
+  if(LIBVA_FOUND)
+    list(APPEND DVB_KMS_SOURCES
+      src/vaapi_decoder.cpp src/vaapi_decoder_source.cpp)
+    list(APPEND DVB_KMS_DEFINES TVTUNER_HAVE_VAAPI)
+    list(APPEND DVB_KMS_LIBS PkgConfig::LIBVA)
+  else()
+    message(STATUS "dvb-cxx: libva not found — VAAPI backend disabled")
+  endif()
+endif()
+
+add_executable(dvb-kms ${DVB_KMS_SOURCES})
+target_include_directories(dvb-kms PRIVATE src)
+target_link_libraries(dvb-kms PRIVATE ${DVB_KMS_LIBS})
+target_compile_definitions(dvb-kms PRIVATE ${DVB_KMS_DEFINES})
 target_compile_options(dvb-kms PRIVATE -Wall -Wextra)
 
 # Unit tests for the pure TS/PSI parsing (no drm-cxx / DVB hardware needed).

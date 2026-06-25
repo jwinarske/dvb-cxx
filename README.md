@@ -38,10 +38,12 @@ dongle) and the codec (MPEG-2/H.262 for ATSC 1.0) differ.
   in `ts_parse`, unit-tested (`tests/test_ts_parse.cpp`).
 - ✅ `KmsPresenter` — drm-cxx scene, aspect-fit video layer, page-flip loop.
 - ✅ `DecoderSource` + `create_decoder_source` fallback factory.
-- ✅ Software backend — libavcodec MPEG-2 → libswscale NV12 → DRM dumb buffer.
-- 🚧 VAAPI backend (`ExternalDmaBufSource`, zero-copy) — *TODO*.
-- 🚧 V4L2 M2M backend (`drm::scene::V4l2DecoderSource`) — *TODO*.
-- 🚧 `--scan` mode (sweep the ATSC table, list locked programs) — *TODO*.
+- ✅ Software backend — libavcodec decode → libswscale NV12 → DRM dumb buffer.
+- ✅ VAAPI backend — libavcodec hwaccel → DRM-PRIME dmabuf → KMS plane,
+  zero-copy. Gated on a driver profile check, so it cleanly defers to V4L2 /
+  software when the GPU can't decode the codec (e.g. MPEG-2 on modern AMD/Intel).
+- ✅ V4L2 M2M backend — wraps `drm::scene::V4l2DecoderSource` (RPi4 / SoC).
+- ✅ `--scan` mode (sweep the ATSC table, list locked programs).
 
 ## Decode backends
 
