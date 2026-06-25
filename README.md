@@ -90,8 +90,26 @@ works.
 
 ## Finding channels in your area
 
-Predict coverage with [antennaweb.org](https://antennaweb.org) or the FCC DTV
-Reception Map (by ZIP). To enumerate what actually locks, use `w_scan2` or
-`dvbv5-scan` with a seed table from `dtv-scan-tables`
-(`/usr/share/dvb/atsc/us-ATSC-center-frequencies-8VSB`); a built-in `--scan`
-mode is planned.
+Predict coverage first with [antennaweb.org](https://antennaweb.org) or the FCC
+DTV Reception Map (by ZIP) to learn which RF channels should reach you, then
+enumerate what actually locks with the built-in scan:
+
+```sh
+dvb-kms --adapter 0 --scan                       # 8-VSB OTA, full 2..69 sweep
+dvb-kms --adapter 0 --scan --modulation all      # also sweep ClearQAM cable
+dvb-kms --adapter 0 --scan --channels 7,9,33     # narrow to a known set
+dvb-kms --adapter 0 --scan --scan-timeout 800    # per-channel lock wait
+```
+
+`--scan` is tuner-only (no display / DRM master needed). `--modulation
+vsb|qam|all` picks the family; it queries the frontend's `DTV_ENUM_DELSYS` and
+skips any it can't lock. QAM uses the EIA-542 "STD" cable plan and tries
+QAM-256 then QAM-64 per channel. Locked channels print their program (video PID
++ codec).
+
+Two practicalities: per-channel hardware retune settling is ~2 s, so a full
+sweep is minutes (a `--channels` list is seconds) — and a full QAM cable sweep
+(2..158 × two constellations) is the slowest, so narrow it. Most US cable is now
+encrypted, so ClearQAM typically finds only a handful of channels; OTA 8-VSB is
+where the content is. `w_scan2` / `dvbv5-scan` remain options for a
+channels.conf.

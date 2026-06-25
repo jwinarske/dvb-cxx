@@ -44,6 +44,30 @@ uint32_t atsc_channel_freq_hz(int ch) {
   return static_cast<uint32_t>(mhz) * 1000000U;
 }
 
+uint32_t cable_channel_freq_hz(int ch) {
+  // EIA-542 "STD" cable plan, channel-center frequencies in MHz. 6 MHz channels
+  // throughout, but with bands broadcast numbering skips (mid-band 14-22,
+  // super/hyper 23-158) plus the 95-99 sub-band tucked below channel 14.
+  int mhz = 0;
+  if (ch >= 2 && ch <= 4)
+    mhz = 57 + (ch - 2) * 6;  // 57, 63, 69
+  else if (ch >= 5 && ch <= 6)
+    mhz = 79 + (ch - 5) * 6;  // 79, 85
+  else if (ch >= 7 && ch <= 13)
+    mhz = 177 + (ch - 7) * 6;  // 177 .. 213
+  else if (ch >= 14 && ch <= 22)
+    mhz = 123 + (ch - 14) * 6;  // 123 .. 171 (mid-band)
+  else if (ch >= 23 && ch <= 94)
+    mhz = 219 + (ch - 23) * 6;  // 219 .. 645 (super/hyper band)
+  else if (ch >= 95 && ch <= 99)
+    mhz = 93 + (ch - 95) * 6;  // 93 .. 117 (sub-band below ch 14)
+  else if (ch >= 100 && ch <= 158)
+    mhz = 651 + (ch - 100) * 6;  // 651 .. 999
+  else
+    return 0;
+  return static_cast<uint32_t>(mhz) * 1000000U;
+}
+
 std::optional<Frontend> Frontend::open(int adapter, int fe) {
   char path[64];
   std::snprintf(path, sizeof path, "/dev/dvb/adapter%d/frontend%d", adapter,
@@ -135,6 +159,20 @@ bool Frontend::tune_atsc_channel(int channel,
     return false;
   }
   return tune(f, Modulation::Vsb8, timeout_ms, verbose);
+}
+
+bool Frontend::supports(Modulation mod) const {
+  const fe_delivery_system want =
+      mod == Modulation::Vsb8 ? SYS_ATSC : SYS_DVBC_ANNEX_B;
+  dtv_property p{};
+  p.cmd = DTV_ENUM_DELSYS;
+  dtv_properties ps{1, &p};
+  if (xioctl(fd_, FE_GET_PROPERTY, &ps) != 0)
+    return false;
+  for (unsigned i = 0; i < p.u.buffer.len; ++i)
+    if (p.u.buffer.data[i] == want)
+      return true;
+  return false;
 }
 
 SignalStatus Frontend::status() const {

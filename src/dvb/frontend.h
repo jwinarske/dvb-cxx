@@ -22,6 +22,12 @@ enum class Modulation { Vsb8, Qam256, Qam64 };
 // or 0 if out of range. 6 MHz channels: low-VHF 2-6, high-VHF 7-13, UHF 14-69.
 uint32_t atsc_channel_freq_hz(int channel);
 
+// Center frequency in Hz of a North-American cable channel (EIA-542 "STD"
+// plan, 2..158), or 0 if out of range. Used for ClearQAM scanning — the cable
+// plan adds the mid-band (14-22), super/hyper bands (23-158), and the 95-99
+// sub-band that broadcast channel numbers don't cover.
+uint32_t cable_channel_freq_hz(int channel);
+
 struct SignalStatus {
   bool has_signal = false;  // FE_HAS_SIGNAL
   bool has_lock = false;    // FE_HAS_LOCK
@@ -56,6 +62,11 @@ class Frontend {
   [[nodiscard]] bool tune_atsc_channel(int channel,
                                        int timeout_ms = 3000,
                                        bool verbose = true) const;
+
+  // True if the frontend's DTV_ENUM_DELSYS advertises the delivery system that
+  // `mod` belongs to (SYS_ATSC for 8-VSB, SYS_DVBC_ANNEX_B for QAM). Lets the
+  // scanner skip modulations this tuner can't lock.
+  [[nodiscard]] bool supports(Modulation mod) const;
 
   [[nodiscard]] SignalStatus status() const;
   [[nodiscard]] int adapter() const noexcept { return adapter_; }

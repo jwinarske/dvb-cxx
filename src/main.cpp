@@ -82,6 +82,18 @@ void parse_channel_list(const char* s, std::vector<int>& out) {
   }
 }
 
+// Which modulation families a scan sweeps. Vsb = ATSC 8-VSB over-the-air;
+// Qam = ClearQAM cable (QAM-256/64); All = both (per frontend capability).
+enum class ScanMod { Vsb, Qam, All };
+
+ScanMod parse_scanmod(const char* s) {
+  if (std::strcmp(s, "qam") == 0)
+    return ScanMod::Qam;
+  if (std::strcmp(s, "all") == 0)
+    return ScanMod::All;
+  return ScanMod::Vsb;
+}
+
 struct Args {
   const char* card = "/dev/dri/card0";
   int adapter = 0;
@@ -90,9 +102,10 @@ struct Args {
   tv::Codec codec =
       tv::Codec::Mpeg2;  // file mode only; live mode reads the PMT
   const char* file = nullptr;
-  bool scan = false;           // sweep channels and report locked programs
-  std::vector<int> channels;   // scan: narrow set; empty = full ATSC spectrum
-  int scan_timeout_ms = 1500;  // scan: per-channel lock timeout
+  bool scan = false;                // sweep channels and report locked programs
+  ScanMod scan_mod = ScanMod::Vsb;  // scan: which modulation family/families
+  std::vector<int> channels;        // scan: narrow set; empty = full plan
+  int scan_timeout_ms = 1500;       // scan: per-channel lock timeout
 };
 
 // Build the presenter, attach a decode source for `codec`, and run the present
@@ -180,46 +193,116 @@ int run_file(const Args& a) {
   });
 }
 
-// Sweep ATSC channels (a narrow --channels set, or the whole 2..69 spectrum by
-// default), tune each, and report the locked ones with their first program.
-// Tuner-only: no DRM, so it runs without a display / DRM master.
+// Sweep one modulation family's channels: tune each, and report the locked ones
+// with their first program. For QAM, tries QAM-256 then QAM-64 per channel.
+// Returns the number of channels that locked.
+int scan_pass(const tv::dvb::Frontend& fe,
+              int adapter,
+              const std::vector<int>& channels,
+              uint32_t (*freq_fn)(int),
+              bool qam,
+              int timeout_ms) {
+  int locked = 0;
+  for (const int ch : channels) {
+    if (g_quit)
+      break;
+    const uint32_t f = freq_fn(ch);
+    if (f == 0)
+      continue;
+    const double mhz = f / 1e6;
+    const char* used = "8-VSB";
+    bool got = false;
+    if (qam) {
+      if (fe.tune(f, tv::dvb::Modulation::Qam256, timeout_ms, false)) {
+        got = true;
+        used = "QAM-256";
+      } else if (fe.tune(f, tv::dvb::Modulation::Qam64, timeout_ms, false)) {
+        got = true;
+        used = "QAM-64";
+      }
+    } else {
+      got = fe.tune(f, tv::dvb::Modulation::Vsb8, timeout_ms, false);
+    }
+    if (!got) {
+      std::printf("  ch %3d (%7.3f MHz): no lock\n", ch, mhz);
+      continue;
+    }
+    ++locked;
+    const tv::dvb::SignalStatus s = fe.status();
+    const auto prog = tv::ts::scan_program(adapter, 2500);
+    if (prog)
+      std::printf(
+          "  ch %3d (%7.3f MHz): LOCK %-7s snr=%u  program %u: video pid %u "
+          "(%s)\n",
+          ch, mhz, used, s.snr, prog->program_number, prog->video_pid,
+          ts_codec_name(prog->video_codec));
+    else
+      std::printf("  ch %3d (%7.3f MHz): LOCK %-7s snr=%u  (no program info)\n",
+                  ch, mhz, used, s.snr);
+    std::fflush(stdout);
+  }
+  return locked;
+}
+
+// Build the channel list for a pass: the explicit --channels set, or the full
+// plan via `freq_fn` over [lo, hi].
+std::vector<int> scan_channels(const Args& a,
+                               uint32_t (*freq_fn)(int),
+                               int lo,
+                               int hi) {
+  if (!a.channels.empty())
+    return a.channels;
+  std::vector<int> out;
+  for (int c = lo; c <= hi; ++c)
+    if (freq_fn(c) != 0)
+      out.push_back(c);
+  return out;
+}
+
+// Tuner-only channel scan (no DRM, so it runs without a display / DRM master).
+// Sweeps 8-VSB and/or QAM per --modulation, skipping any the frontend can't do.
 int run_scan(const Args& a) {
   auto fe = tv::dvb::Frontend::open(a.adapter);
   if (!fe)
     return 1;
 
-  std::vector<int> channels = a.channels;
-  if (channels.empty())
-    for (int c = 2; c <= 69; ++c)
-      if (tv::dvb::atsc_channel_freq_hz(c) != 0)
-        channels.push_back(c);
+  const bool want_vsb =
+      a.scan_mod == ScanMod::Vsb || a.scan_mod == ScanMod::All;
+  const bool want_qam =
+      a.scan_mod == ScanMod::Qam || a.scan_mod == ScanMod::All;
 
-  std::printf("scanning %zu channels on adapter %d (%d ms/channel)...\n",
-              channels.size(), a.adapter, a.scan_timeout_ms);
-  int locked = 0;
-  for (const int ch : channels) {
-    if (g_quit)
-      break;
-    const double mhz = tv::dvb::atsc_channel_freq_hz(ch) / 1e6;
-    if (!fe->tune_atsc_channel(ch, a.scan_timeout_ms, /*verbose=*/false)) {
-      std::printf("  ch %2d (%7.3f MHz): no lock\n", ch, mhz);
-      continue;
+  int total_locked = 0;
+  size_t total_channels = 0;
+
+  if (want_vsb) {
+    if (!fe->supports(tv::dvb::Modulation::Vsb8)) {
+      std::fprintf(stderr, "scan: frontend has no 8-VSB; skipping\n");
+    } else {
+      const auto ch = scan_channels(a, tv::dvb::atsc_channel_freq_hz, 2, 69);
+      std::printf("== 8-VSB (ATSC OTA): %zu channels, %d ms/ch ==\n", ch.size(),
+                  a.scan_timeout_ms);
+      total_locked +=
+          scan_pass(*fe, a.adapter, ch, tv::dvb::atsc_channel_freq_hz,
+                    /*qam=*/false, a.scan_timeout_ms);
+      total_channels += ch.size();
     }
-    ++locked;
-    const tv::dvb::SignalStatus s = fe->status();
-    const auto prog = tv::ts::scan_program(a.adapter, 2500);
-    if (prog)
-      std::printf(
-          "  ch %2d (%7.3f MHz): LOCK snr=%u  program %u: video pid %u (%s)\n",
-          ch, mhz, s.snr, prog->program_number, prog->video_pid,
-          ts_codec_name(prog->video_codec));
-    else
-      std::printf("  ch %2d (%7.3f MHz): LOCK snr=%u  (no program info)\n", ch,
-                  mhz, s.snr);
-    std::fflush(stdout);
   }
-  std::printf("scan complete: %d of %zu channels locked\n", locked,
-              channels.size());
+  if (want_qam) {
+    if (!fe->supports(tv::dvb::Modulation::Qam256)) {
+      std::fprintf(stderr, "scan: frontend has no QAM; skipping\n");
+    } else {
+      const auto ch = scan_channels(a, tv::dvb::cable_channel_freq_hz, 2, 158);
+      std::printf(
+          "== QAM (ClearQAM cable): %zu channels x{256,64}, %d ms/ch ==\n",
+          ch.size(), a.scan_timeout_ms);
+      total_locked +=
+          scan_pass(*fe, a.adapter, ch, tv::dvb::cable_channel_freq_hz,
+                    /*qam=*/true, a.scan_timeout_ms);
+      total_channels += ch.size();
+    }
+  }
+  std::printf("scan complete: %d of %zu channels locked\n", total_locked,
+              total_channels);
   return 0;
 }
 
@@ -240,6 +323,8 @@ int main(int argc, char** argv) {
       a.codec = parse_codec(argv[++i]);
     else if (std::strcmp(argv[i], "--scan") == 0)
       a.scan = true;
+    else if (std::strcmp(argv[i], "--modulation") == 0 && i + 1 < argc)
+      a.scan_mod = parse_scanmod(argv[++i]);
     else if (std::strcmp(argv[i], "--channels") == 0 && i + 1 < argc)
       parse_channel_list(argv[++i], a.channels);
     else if (std::strcmp(argv[i], "--scan-timeout") == 0 && i + 1 < argc)
@@ -264,12 +349,12 @@ int main(int argc, char** argv) {
   if (a.file != nullptr)
     return run_file(a);
 
-  std::fprintf(
-      stderr,
-      "usage:\n"
-      "  dvb-kms [--card DEV] --adapter N --channel C   (ATSC OTA)\n"
-      "  dvb-kms [--card DEV] --adapter N --freq HZ      (explicit)\n"
-      "  dvb-kms [--card DEV] [--codec mpeg2|h264|hevc] FILE.es\n"
-      "  dvb-kms --adapter N --scan [--channels 7,9,33] [--scan-timeout MS]\n");
+  std::fprintf(stderr,
+               "usage:\n"
+               "  dvb-kms [--card DEV] --adapter N --channel C   (ATSC OTA)\n"
+               "  dvb-kms [--card DEV] --adapter N --freq HZ      (explicit)\n"
+               "  dvb-kms [--card DEV] [--codec mpeg2|h264|hevc] FILE.es\n"
+               "  dvb-kms --adapter N --scan [--modulation vsb|qam|all]\n"
+               "          [--channels 7,9,33] [--scan-timeout MS]\n");
   return 2;
 }
