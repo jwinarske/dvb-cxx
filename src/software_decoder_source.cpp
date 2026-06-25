@@ -271,6 +271,11 @@ bool SoftwareDecoderSource::ensure_pool(uint32_t w, uint32_t h) {
   uint32_t ow = w;
   uint32_t oh = h;
   out_dims(w, h, ow, oh);
+  // Clear any slots a prior partial failure left populated, so the create loop
+  // below doesn't overwrite (and leak) their handle/fb/mapping on retry. A
+  // no-op on the first call (all slots zero-initialized).
+  for (Buf& b : bufs_)
+    destroy_buf(b);
   for (Buf& b : bufs_) {
     uint32_t handle = 0;
     uint32_t pitch = 0;

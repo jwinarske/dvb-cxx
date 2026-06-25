@@ -47,6 +47,7 @@ enum AVPixelFormat get_vaapi_format(AVCodecContext* ctx,
     av_buffer_unref(&frames);
     return fmts[0];
   }
+  av_buffer_unref(&ctx->hw_frames_ctx);  // free any prior ctx on renegotiation
   ctx->hw_frames_ctx = frames;
   return AV_PIX_FMT_VAAPI;
 }
@@ -248,7 +249,9 @@ void VaapiDecoder::deliver(AVFrame* vaapi_frame) {
   f.surface_id = static_cast<uint32_t>(surf);
   const auto& layer = d.layers[0];
   f.drm_fourcc = layer.drm_format;
-  f.nplanes = static_cast<int>(layer.num_planes);
+  // Clamp: DrmFrame::planes[] has 4 slots and consumers iterate nplanes; a
+  // layer claiming >4 planes must not let them index past the array.
+  f.nplanes = static_cast<int>(layer.num_planes < 4 ? layer.num_planes : 4);
   for (uint32_t p = 0; p < layer.num_planes && p < 4; ++p) {
     uint32_t obj = layer.object_index[p];
     f.planes[p].fd = d.objects[obj].fd;

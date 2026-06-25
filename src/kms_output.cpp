@@ -18,8 +18,13 @@ bool pick_mode(const drmModeConnector* c, drmModeModeInfo& out) {
       out = c->modes[i];
       return true;
     }
-    if (best < 0 || c->modes[i].hdisplay * c->modes[i].vdisplay >
-                        c->modes[best].hdisplay * c->modes[best].vdisplay)
+    const uint32_t area =
+        static_cast<uint32_t>(c->modes[i].hdisplay) * c->modes[i].vdisplay;
+    const uint32_t best_area =
+        best < 0 ? 0
+                 : static_cast<uint32_t>(c->modes[best].hdisplay) *
+                       c->modes[best].vdisplay;
+    if (best < 0 || area > best_area)
       best = i;
   }
   if (best < 0)

@@ -220,6 +220,22 @@ void VaapiDecoderSource::import_pending_locked() {
         close(pending_.fd[i]);
     if (r != 0) {
       std::fprintf(stderr, "kms: drmModeAddFB2WithModifiers failed: %d\n", r);
+      // Close the GEM handles imported above, else each AddFB2 failure leaks
+      // them for the DRM fd's lifetime. Skip duplicates (NV12 single object
+      // maps both planes to one handle).
+      for (int i = 0; i < pending_.nplanes; ++i) {
+        if (handles[i] == 0)
+          continue;
+        bool dup = false;
+        for (int j = 0; j < i; ++j)
+          if (handles[j] == handles[i])
+            dup = true;
+        if (dup)
+          continue;
+        drm_gem_close gc{};
+        gc.handle = handles[i];
+        drmIoctl(drm_fd_, DRM_IOCTL_GEM_CLOSE, &gc);
+      }
       if (pending_.held)
         av_frame_free(&pending_.held);
       pending_ = Pending{};

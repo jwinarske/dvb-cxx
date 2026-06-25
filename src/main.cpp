@@ -114,7 +114,16 @@ int play(const Args& a,
   if (feed == nullptr)
     return 1;
 
-  std::thread feeder([&] { feed_fn(feed); });
+  // Guard the feed body: an exception escaping a std::thread calls
+  // std::terminate, bypassing the orderly g_quit/join shutdown.
+  std::thread feeder([&] {
+    try {
+      feed_fn(feed);
+    } catch (const std::exception& e) {
+      std::fprintf(stderr, "feed: %s\n", e.what());
+      g_quit = true;
+    }
+  });
   const int rc = presenter->run(g_quit);
   g_quit = true;
   if (feeder.joinable())
@@ -235,7 +244,12 @@ int main(int argc, char** argv) {
       parse_channel_list(argv[++i], a.channels);
     else if (std::strcmp(argv[i], "--scan-timeout") == 0 && i + 1 < argc)
       a.scan_timeout_ms = static_cast<int>(std::strtol(argv[++i], nullptr, 10));
-    else
+    else if (argv[i][0] == '-') {
+      // An unknown flag, or a known flag missing its value (which would
+      // otherwise be silently taken as the input filename).
+      std::fprintf(stderr, "unknown or incomplete option: %s\n", argv[i]);
+      return 2;
+    } else
       a.file = argv[i];
   }
 

@@ -47,9 +47,11 @@ class KmsPresenter {
   int run(const std::atomic<bool>& quit);
 
  private:
-  KmsPresenter(drm::Device dev,
-               Output out,
-               std::unique_ptr<drm::scene::LayerScene> scene) noexcept;
+  // scene_ is created *after* construction, against the member dev_: drm-cxx's
+  // LayerScene caches &device and dereferences it on every commit, so the
+  // Device must already live at its final (post-move) address before the scene
+  // is built. See create().
+  KmsPresenter(drm::Device dev, Output out) noexcept;
 
   drm::Device dev_;
   Output out_;

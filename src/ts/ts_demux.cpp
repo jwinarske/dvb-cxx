@@ -165,6 +165,11 @@ void Demux::run(const std::atomic<bool>& quit, const EsSink& sink) {
     const int pr = ::poll(&p, 1, 200);
     if (pr <= 0)
       continue;
+    // The tuner unplugging (or the dvr hanging up) raises POLLHUP/POLLERR with
+    // POLLIN clear; poll then returns immediately, so a `continue` here would
+    // busy-spin at 100% CPU. Treat hangup/error as end-of-stream.
+    if ((p.revents & (POLLHUP | POLLERR | POLLNVAL)) != 0)
+      break;
     if ((p.revents & POLLIN) == 0)
       continue;
 

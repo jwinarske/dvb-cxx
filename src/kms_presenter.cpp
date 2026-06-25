@@ -15,11 +15,8 @@
 
 namespace tv {
 
-KmsPresenter::KmsPresenter(
-    drm::Device dev,
-    Output out,
-    std::unique_ptr<drm::scene::LayerScene> scene) noexcept
-    : dev_(std::move(dev)), out_(out), scene_(std::move(scene)) {}
+KmsPresenter::KmsPresenter(drm::Device dev, Output out) noexcept
+    : dev_(std::move(dev)), out_(out) {}
 
 std::unique_ptr<KmsPresenter> KmsPresenter::create(const char* card_path) {
   auto dev_r = drm::Device::open(card_path);
@@ -44,19 +41,24 @@ std::unique_ptr<KmsPresenter> KmsPresenter::create(const char* card_path) {
   if (!out)
     return nullptr;
 
+  // Construct the presenter first so dev_ is at its final address, then build
+  // the scene against the member: LayerScene caches &device and dereferences it
+  // every commit, so it must not be built against the about-to-be-moved local.
+  std::unique_ptr<KmsPresenter> presenter(
+      new KmsPresenter(std::move(dev), *out));
+
   drm::scene::LayerScene::Config cfg;
   cfg.crtc_id = out->crtc_id;
   cfg.connector_id = out->connector_id;
   cfg.mode = out->mode;
-  auto scene_r = drm::scene::LayerScene::create(dev, cfg);
+  auto scene_r = drm::scene::LayerScene::create(presenter->dev_, cfg);
   if (!scene_r) {
     std::fprintf(stderr, "kms: LayerScene::create: %s\n",
                  scene_r.error().message().c_str());
     return nullptr;
   }
-
-  return std::unique_ptr<KmsPresenter>(
-      new KmsPresenter(std::move(dev), *out, std::move(*scene_r)));
+  presenter->scene_ = std::move(*scene_r);
+  return presenter;
 }
 
 DecoderSource* KmsPresenter::set_source(std::unique_ptr<DecoderSource> src,
